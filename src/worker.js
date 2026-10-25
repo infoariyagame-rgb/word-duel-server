@@ -1,6 +1,4 @@
 
-import dictionary from "./word-duel-dictionary-2to4.json";
-
 const HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "access-control-allow-origin": "*",
@@ -8,11 +6,12 @@ const HEADERS = {
   "access-control-allow-headers": "content-type"
 };
 
-const respond = (data, status = 200) =>
-  new Response(JSON.stringify(data), {
+function respond(data, status = 200) {
+  return new Response(JSON.stringify(data), {
     status,
     headers: HEADERS
   });
+}
 
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -22,6 +21,29 @@ function makeCode() {
     n => ALPHABET[n % ALPHABET.length]
   ).join("");
 }
+
+const LEVELS = [
+  {
+    letters: "کتاب",
+    words: ["کتاب", "تاب", "باک", "تاک", "بات"]
+  },
+  {
+    letters: "مادر",
+    words: ["مادر", "دام", "رام", "مار", "دار", "راد"]
+  },
+  {
+    letters: "دریا",
+    words: ["دریا", "یار", "دار", "یاد", "رای", "دیر"]
+  },
+  {
+    letters: "بهار",
+    words: ["بهار", "راه", "بار", "هار", "ربا"]
+  },
+  {
+    letters: "سفره",
+    words: ["سفره", "سفر", "سره", "رفه"]
+  }
+];
 
 function norm(value) {
   return String(value || "")
@@ -36,69 +58,22 @@ function buildable(word, letters) {
   const chars = [...letters];
 
   for (const c of [...word]) {
-    const i = chars.indexOf(c);
-    if (i < 0) return false;
-    chars.splice(i, 1);
+    const index = chars.indexOf(c);
+
+    if (index < 0) return false;
+
+    chars.splice(index, 1);
   }
 
   return true;
 }
 
-const WORDS = [
-  ...new Set(
-    [
-      ...(dictionary["2"] || []),
-      ...(dictionary["3"] || []),
-      ...(dictionary["4"] || [])
-    ]
-      .map(norm)
-      .filter(w =>
-        /^[\u0621-\u064A\u067E\u0686\u0698\u06A9\u06AF\u06CC\u0622]{2,4}$/u.test(w)
-      )
-  )
-];
-
-const WORD_SET = new Set(WORDS);
-
-const BOARDS = [];
-
-for (const letters of new Set(
-  (dictionary["4"] || []).map(norm)
-)) {
-  if (
-    letters.length !== 4 ||
-    new Set([...letters]).size !== 4 ||
-    !WORD_SET.has(letters)
-  ) {
-    continue;
-  }
-
-  let count = 0;
-
-  for (const w of WORDS) {
-    if (buildable(w, letters) && ++count >= 5) {
-      break;
-    }
-  }
-
-  if (count >= 5) {
-    BOARDS.push(letters);
-  }
-}
-
-const FALLBACK = ["کتاب", "مادر", "بهار"]
-  .filter(w => WORD_SET.has(w));
-
-const PLAYABLE = BOARDS.length ? BOARDS : FALLBACK;
-
 function chooseLetters() {
-  if (!PLAYABLE.length) {
-    throw new Error("dictionary_has_no_playable_boards");
-  }
-
-  return PLAYABLE[
-    Math.floor(Math.random() * PLAYABLE.length)
+  const level = LEVELS[
+    Math.floor(Math.random() * LEVELS.length)
   ];
+
+  return level.letters;
 }
 
 function summary(room, playerId) {
@@ -141,7 +116,11 @@ function summary(room, playerId) {
     scores: room.scores || [0, 0],
     words: room.words || [[], []],
     playerIndex: index,
-    winner
+    winner,
+    round: room.round || 1,
+    rematchVotes: room.rematchVotes || [],
+    rematchRequested:
+      (room.rematchVotes || []).length > 0
   };
 }
 
@@ -160,23 +139,24 @@ export default {
         ok: true,
         service: "word-duel",
         gameplay: true,
-        version: 4,
-        dictionaryWords: WORD_SET.size,
-        playableBoards: PLAYABLE.length,
-        matchmaking: "fixed"
+        version: 5,
+        matchmaking: "fixed",
+        rematch: true,
+        dictionaryMode: "built_in"
       });
     }
 
     if (request.method !== "POST") {
       return respond({
-        message: "Word Duel API v4",
+        message: "Word Duel API v5",
         endpoints: [
           "/create",
           "/join",
           "/quick",
           "/status",
           "/word",
-          "/leave"
+          "/leave",
+          "/rematch"
         ]
       });
     }
@@ -225,22 +205,18 @@ export default {
       }, 400);
     }
 
-    const stub = env.GAME_ROOMS.get(
-      env.GAME_ROOMS.idFromName(roomCode)
-    );
+    const id = env.GAME_ROOMS.idFromName(roomCode);
+    const stub = env.GAME_ROOMS.get(id);
 
     return stub.fetch(
-      new Request(
-        "https://room.internal" + path,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            ...body,
-            playerId,
-            code: roomCode
-          })
-        }
-      )
+      new Request("https://room.internal" + path, {
+        method: "POST",
+        body: JSON.stringify({
+          ...body,
+          playerId,
+          code: roomCode
+        })
+      })
     );
   }
 };
@@ -253,6 +229,7 @@ export class GameRoom {
 
   async fetch(request) {
     const data = await request.json();
+
     const playerId = data.playerId;
     const roomKey = data.code;
     const action = new URL(request.url).pathname;
@@ -267,8 +244,9 @@ export class GameRoom {
       }
     }
 
-    const save = async () =>
-      this.ctx.storage.put("rooms", rooms);
+    const save = async () => {
+      await this.ctx.storage.put("rooms", rooms);
+    };
 
     const createRoom = id => ({
       code: id,
@@ -277,7 +255,9 @@ export class GameRoom {
       scores: [0, 0],
       words: [[], []],
       letters: null,
-      deadline: null
+      deadline: null,
+      round: 1,
+      rematchVotes: []
     });
 
     const activate = room => {
@@ -289,20 +269,20 @@ export class GameRoom {
         room.deadline = Date.now() + 90000;
         room.scores = [0, 0];
         room.words = [[], []];
+        room.rematchVotes = [];
         room.updated = Date.now();
       }
     };
 
+    // مسابقه تصادفی
     if (roomKey === "MATCHMAKER") {
+
       if (action === "/quick") {
 
         for (const [key, room] of Object.entries(rooms)) {
           if (
             room.players.includes(playerId) &&
-            (
-              room.deadline ||
-              room.players.length !== 1
-            )
+            (room.deadline || room.players.length !== 1)
           ) {
             room.players = room.players.filter(
               p => p !== playerId
@@ -337,9 +317,7 @@ export class GameRoom {
             room.players.push(playerId);
             activate(room);
           } else {
-            room = createRoom(
-              crypto.randomUUID()
-            );
+            room = createRoom(crypto.randomUUID());
             rooms[room.code] = room;
           }
         }
@@ -347,14 +325,10 @@ export class GameRoom {
         room.updated = Date.now();
         await save();
 
-        return respond(
-          summary(room, playerId)
-        );
+        return respond(summary(room, playerId));
       }
 
-      const requested = String(
-        data.roomId || ""
-      );
+      const requested = String(data.roomId || "");
 
       const room = Object.values(rooms).find(
         r =>
@@ -378,6 +352,7 @@ export class GameRoom {
       );
     }
 
+    // اتاق خصوصی
     let room = rooms[roomKey];
 
     if (action === "/create") {
@@ -392,9 +367,7 @@ export class GameRoom {
 
       await save();
 
-      return respond(
-        summary(room, playerId)
-      );
+      return respond(summary(room, playerId));
     }
 
     if (action === "/join") {
@@ -421,9 +394,7 @@ export class GameRoom {
       room.updated = Date.now();
       await save();
 
-      return respond(
-        summary(room, playerId)
-      );
+      return respond(summary(room, playerId));
     }
 
     if (
@@ -453,19 +424,55 @@ export class GameRoom {
     playerId,
     save
   ) {
+
     if (action === "/status") {
-      return respond(
-        summary(room, playerId)
-      );
+      return respond(summary(room, playerId));
     }
 
+    // مسابقه انتقامی
+    if (action === "/rematch") {
+      if (
+        room.players.length !== 2 ||
+        !room.deadline ||
+        Date.now() < room.deadline
+      ) {
+        return respond({
+          error: "rematch_not_ready"
+        }, 409);
+      }
+
+      room.rematchVotes ||= [];
+
+      if (!room.rematchVotes.includes(playerId)) {
+        room.rematchVotes.push(playerId);
+      }
+
+      // با تأیید هر دو نفر، دور تازه آغاز می‌شود
+      if (room.rematchVotes.length === 2) {
+        room.round = (room.round || 1) + 1;
+
+        room.letters = chooseLetters();
+        room.deadline = Date.now() + 90000;
+
+        room.scores = [0, 0];
+        room.words = [[], []];
+        room.rematchVotes = [];
+      }
+
+      room.updated = Date.now();
+      await save();
+
+      return respond(summary(room, playerId));
+    }
+
+    // خروج از اتاق
     if (action === "/leave") {
       room.players = room.players.filter(
         p => p !== playerId
       );
 
       if (
-        !room.players.length ||
+        room.players.length === 0 ||
         room.deadline
       ) {
         delete rooms[room.code];
@@ -480,6 +487,7 @@ export class GameRoom {
       });
     }
 
+    // ثبت کلمه
     if (action === "/word") {
       if (room.players.length !== 2) {
         return respond({
@@ -499,7 +507,7 @@ export class GameRoom {
 
       if (
         !word ||
-        word.length > 4 ||
+        word.length > 24 ||
         word.length < 2
       ) {
         return respond({
@@ -507,8 +515,13 @@ export class GameRoom {
         }, 400);
       }
 
+      const level = LEVELS.find(
+        l => l.letters === room.letters
+      );
+
       if (
-        !WORD_SET.has(word) ||
+        !level ||
+        !level.words.includes(word) ||
         !buildable(word, room.letters)
       ) {
         return respond({
@@ -525,14 +538,16 @@ export class GameRoom {
       }
 
       room.words[index].push(word);
-      room.scores[index] += word.length * 10;
+
+      const points = word.length * 10;
+      room.scores[index] += points;
       room.updated = Date.now();
 
       await save();
 
       return respond({
         accepted: true,
-        points: word.length * 10,
+        points,
         ...summary(room, playerId)
       });
     }
