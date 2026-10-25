@@ -1,4 +1,6 @@
 
+import dictionary from "./word-duel-dictionary-2to4.json";
+
 const HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "access-control-allow-origin": "*",
@@ -6,12 +8,11 @@ const HEADERS = {
   "access-control-allow-headers": "content-type"
 };
 
-function respond(data, status = 200) {
-  return new Response(JSON.stringify(data), {
+const respond = (data, status = 200) =>
+  new Response(JSON.stringify(data), {
     status,
     headers: HEADERS
   });
-}
 
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -21,29 +22,6 @@ function makeCode() {
     n => ALPHABET[n % ALPHABET.length]
   ).join("");
 }
-
-const LEVELS = [
-  {
-    letters: "کتاب",
-    words: ["کتاب", "تاب", "باک", "تاک", "بات"]
-  },
-  {
-    letters: "مادر",
-    words: ["مادر", "دام", "رام", "مار", "دار", "راد"]
-  },
-  {
-    letters: "دریا",
-    words: ["دریا", "یار", "دار", "یاد", "رای", "دیر"]
-  },
-  {
-    letters: "بهار",
-    words: ["بهار", "راه", "بار", "هار", "ربا"]
-  },
-  {
-    letters: "سفره",
-    words: ["سفره", "سفر", "سره", "رفه"]
-  }
-];
 
 function norm(value) {
   return String(value || "")
@@ -58,20 +36,83 @@ function buildable(word, letters) {
   const chars = [...letters];
 
   for (const c of [...word]) {
-    const index = chars.indexOf(c);
-    if (index < 0) return false;
-    chars.splice(index, 1);
+    const i = chars.indexOf(c);
+    if (i < 0) return false;
+    chars.splice(i, 1);
   }
 
   return true;
 }
 
+const WORDS = [
+  ...new Set(
+    [
+      ...(dictionary["2"] || []),
+      ...(dictionary["3"] || []),
+      ...(dictionary["4"] || [])
+    ]
+      .map(norm)
+      .filter(w =>
+        /^[\u0621-\u064A\u067E\u0686\u0698\u06A9\u06AF\u06CC\u0622]{2,4}$/u.test(w)
+      )
+  )
+];
+
+const WORD_SET = new Set(WORDS);
+
+const BOARDS = [];
+
+for (const letters of new Set(
+  (dictionary["4"] || []).map(norm)
+)) {
+  if (
+    letters.length !== 4 ||
+    new Set([...letters]).size !== 4 ||
+    !WORD_SET.has(letters)
+  ) {
+    continue;
+  }
+
+  let count = 0;
+
+  for (const w of WORDS) {
+    if (buildable(w, letters) && ++count >= 5) {
+      break;
+    }
+  }
+
+  if (count >= 5) {
+    BOARDS.push(letters);
+  }
+}
+
+const FALLBACK = ["کتاب", "مادر", "بهار"]
+  .filter(w => WORD_SET.has(w));
+
+const PLAYABLE = BOARDS.length ? BOARDS : FALLBACK;
+
+function chooseLetters() {
+  if (!PLAYABLE.length) {
+    throw new Error("dictionary_has_no_playable_boards");
+  }
+
+  return PLAYABLE[
+    Math.floor(Math.random() * PLAYABLE.length)
+  ];
+}
+
 function summary(room, playerId) {
   const index = room.players.indexOf(playerId);
-  const active = room.players.length === 2 && !!room.deadline;
+
+  const active =
+    room.players.length === 2 &&
+    !!room.deadline;
 
   const remaining = active
-    ? Math.max(0, Math.ceil((room.deadline - Date.now()) / 1000))
+    ? Math.max(
+        0,
+        Math.ceil((room.deadline - Date.now()) / 1000)
+      )
     : 90;
 
   const status = !active
@@ -107,7 +148,9 @@ function summary(room, playerId) {
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers: HEADERS });
+      return new Response(null, {
+        headers: HEADERS
+      });
     }
 
     const path = new URL(request.url).pathname;
@@ -117,14 +160,16 @@ export default {
         ok: true,
         service: "word-duel",
         gameplay: true,
-        version: 3,
+        version: 4,
+        dictionaryWords: WORD_SET.size,
+        playableBoards: PLAYABLE.length,
         matchmaking: "fixed"
       });
     }
 
     if (request.method !== "POST") {
       return respond({
-        message: "Word Duel API v3",
+        message: "Word Duel API v4",
         endpoints: [
           "/create",
           "/join",
@@ -141,13 +186,19 @@ export default {
     try {
       body = await request.json();
     } catch {
-      return respond({ error: "invalid_json" }, 400);
+      return respond({
+        error: "invalid_json"
+      }, 400);
     }
 
-    const playerId = String(body.playerId || "").trim();
+    const playerId = String(
+      body.playerId || ""
+    ).trim();
 
     if (!/^[a-zA-Z0-9_-]{8,80}$/.test(playerId)) {
-      return respond({ error: "invalid_player_id" }, 400);
+      return respond({
+        error: "invalid_player_id"
+      }, 400);
     }
 
     let roomCode = String(
@@ -158,7 +209,10 @@ export default {
       roomCode = makeCode();
     }
 
-    if (path === "/quick" || body.matchType === "quick") {
+    if (
+      path === "/quick" ||
+      body.matchType === "quick"
+    ) {
       roomCode = "MATCHMAKER";
     }
 
@@ -166,21 +220,27 @@ export default {
       !/^[A-Z2-9]{6}$/.test(roomCode) &&
       roomCode !== "MATCHMAKER"
     ) {
-      return respond({ error: "invalid_room_code" }, 400);
+      return respond({
+        error: "invalid_room_code"
+      }, 400);
     }
 
-    const id = env.GAME_ROOMS.idFromName(roomCode);
-    const stub = env.GAME_ROOMS.get(id);
+    const stub = env.GAME_ROOMS.get(
+      env.GAME_ROOMS.idFromName(roomCode)
+    );
 
     return stub.fetch(
-      new Request("https://room.internal" + path, {
-        method: "POST",
-        body: JSON.stringify({
-          ...body,
-          playerId,
-          code: roomCode
-        })
-      })
+      new Request(
+        "https://room.internal" + path,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...body,
+            playerId,
+            code: roomCode
+          })
+        }
+      )
     );
   }
 };
@@ -198,18 +258,17 @@ export class GameRoom {
     const action = new URL(request.url).pathname;
     const now = Date.now();
 
-    const rooms = await this.ctx.storage.get("rooms") || {};
+    const rooms =
+      await this.ctx.storage.get("rooms") || {};
 
-    // حذف اتاق‌های قدیمی
     for (const [key, room] of Object.entries(rooms)) {
       if (now - (room.updated || 0) > 3600000) {
         delete rooms[key];
       }
     }
 
-    const save = async () => {
-      await this.ctx.storage.put("rooms", rooms);
-    };
+    const save = async () =>
+      this.ctx.storage.put("rooms", rooms);
 
     const createRoom = id => ({
       code: id,
@@ -222,12 +281,11 @@ export class GameRoom {
     });
 
     const activate = room => {
-      if (room.players.length === 2 && !room.deadline) {
-        const level = LEVELS[
-          Math.floor(Math.random() * LEVELS.length)
-        ];
-
-        room.letters = level.letters;
+      if (
+        room.players.length === 2 &&
+        !room.deadline
+      ) {
+        room.letters = chooseLetters();
         room.deadline = Date.now() + 90000;
         room.scores = [0, 0];
         room.words = [[], []];
@@ -235,30 +293,30 @@ export class GameRoom {
       }
     };
 
-    // بازی تصادفی
     if (roomKey === "MATCHMAKER") {
-
       if (action === "/quick") {
 
-        // حذف عضویت‌های قدیمی همین بازیکن
         for (const [key, room] of Object.entries(rooms)) {
-          if (room.players.includes(playerId)) {
-            if (room.deadline || room.players.length !== 1) {
-              room.players = room.players.filter(
-                p => p !== playerId
-              );
+          if (
+            room.players.includes(playerId) &&
+            (
+              room.deadline ||
+              room.players.length !== 1
+            )
+          ) {
+            room.players = room.players.filter(
+              p => p !== playerId
+            );
 
-              if (
-                room.players.length === 0 ||
-                room.deadline
-              ) {
-                delete rooms[key];
-              }
+            if (
+              !room.players.length ||
+              room.deadline
+            ) {
+              delete rooms[key];
             }
           }
         }
 
-        // ابتدا بررسی می‌کنیم آیا بازیکن اتاق انتظار دارد
         let room = Object.values(rooms).find(
           r =>
             r.players.length === 1 &&
@@ -266,7 +324,6 @@ export class GameRoom {
             !r.deadline
         );
 
-        // پیدا کردن حریف معتبر
         if (!room) {
           room = Object.values(rooms).find(
             r =>
@@ -280,7 +337,9 @@ export class GameRoom {
             room.players.push(playerId);
             activate(room);
           } else {
-            room = createRoom(crypto.randomUUID());
+            room = createRoom(
+              crypto.randomUUID()
+            );
             rooms[room.code] = room;
           }
         }
@@ -288,10 +347,14 @@ export class GameRoom {
         room.updated = Date.now();
         await save();
 
-        return respond(summary(room, playerId));
+        return respond(
+          summary(room, playerId)
+        );
       }
 
-      const requested = String(data.roomId || "");
+      const requested = String(
+        data.roomId || ""
+      );
 
       const room = Object.values(rooms).find(
         r =>
@@ -300,7 +363,9 @@ export class GameRoom {
       );
 
       if (!room) {
-        return respond({ error: "room_not_found" }, 404);
+        return respond({
+          error: "room_not_found"
+        }, 404);
       }
 
       return this.handle(
@@ -313,29 +378,40 @@ export class GameRoom {
       );
     }
 
-    // اتاق خصوصی
     let room = rooms[roomKey];
 
     if (action === "/create") {
       if (room) {
-        return respond({ error: "code_collision_retry" }, 409);
+        return respond({
+          error: "code_collision_retry"
+        }, 409);
       }
 
       room = createRoom(roomKey);
       rooms[roomKey] = room;
 
       await save();
-      return respond(summary(room, playerId));
+
+      return respond(
+        summary(room, playerId)
+      );
     }
 
     if (action === "/join") {
       if (!room) {
-        return respond({ error: "room_not_found" }, 404);
+        return respond({
+          error: "room_not_found"
+        }, 404);
       }
 
       if (!room.players.includes(playerId)) {
-        if (room.players.length >= 2 || room.deadline) {
-          return respond({ error: "room_full" }, 409);
+        if (
+          room.players.length >= 2 ||
+          room.deadline
+        ) {
+          return respond({
+            error: "room_full"
+          }, 409);
         }
 
         room.players.push(playerId);
@@ -345,11 +421,18 @@ export class GameRoom {
       room.updated = Date.now();
       await save();
 
-      return respond(summary(room, playerId));
+      return respond(
+        summary(room, playerId)
+      );
     }
 
-    if (!room || !room.players.includes(playerId)) {
-      return respond({ error: "room_not_found" }, 404);
+    if (
+      !room ||
+      !room.players.includes(playerId)
+    ) {
+      return respond({
+        error: "room_not_found"
+      }, 404);
     }
 
     return this.handle(
@@ -362,10 +445,18 @@ export class GameRoom {
     );
   }
 
-  async handle(room, rooms, action, data, playerId, save) {
-
+  async handle(
+    room,
+    rooms,
+    action,
+    data,
+    playerId,
+    save
+  ) {
     if (action === "/status") {
-      return respond(summary(room, playerId));
+      return respond(
+        summary(room, playerId)
+      );
     }
 
     if (action === "/leave") {
@@ -374,7 +465,7 @@ export class GameRoom {
       );
 
       if (
-        room.players.length === 0 ||
+        !room.players.length ||
         room.deadline
       ) {
         delete rooms[room.code];
@@ -383,15 +474,17 @@ export class GameRoom {
       }
 
       await save();
-      return respond({ ok: true });
+
+      return respond({
+        ok: true
+      });
     }
 
     if (action === "/word") {
       if (room.players.length !== 2) {
-        return respond(
-          { error: "waiting_for_opponent" },
-          409
-        );
+        return respond({
+          error: "waiting_for_opponent"
+        }, 409);
       }
 
       if (Date.now() >= room.deadline) {
@@ -404,17 +497,18 @@ export class GameRoom {
       const word = norm(data.word);
       const index = room.players.indexOf(playerId);
 
-      if (!word || word.length > 24) {
-        return respond({ error: "invalid_word" }, 400);
+      if (
+        !word ||
+        word.length > 4 ||
+        word.length < 2
+      ) {
+        return respond({
+          error: "invalid_word"
+        }, 400);
       }
 
-      const level = LEVELS.find(
-        l => l.letters === room.letters
-      );
-
       if (
-        !level ||
-        !level.words.includes(word) ||
+        !WORD_SET.has(word) ||
         !buildable(word, room.letters)
       ) {
         return respond({
@@ -443,6 +537,8 @@ export class GameRoom {
       });
     }
 
-    return respond({ error: "not_found" }, 404);
+    return respond({
+      error: "not_found"
+    }, 404);
   }
 }
