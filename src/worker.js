@@ -1,3 +1,4 @@
+
 const HEADERS={'content-type':'application/json; charset=utf-8','access-control-allow-origin':'*','access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'content-type'};
 const respond=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:HEADERS});
 const ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -42,7 +43,7 @@ export class GameRoom{
   if(roomKey==='MATCHMAKER'){
    let room=Object.values(rooms).find(r=>r.players.includes(playerId));
    if(action==='/quick'){
-    if(!room){room=Object.values(rooms).find(r=>r.players.length===1&&r.players[0]!==playerId);
+    if(!room){room=Object.values(rooms).find(r=>r.players.length===1&&!r.deadline&&r.players[0]!==playerId);
      if(room){room.players.push(playerId);activate(room)}else{room=init(crypto.randomUUID());rooms[room.code]=room}}
     room.updated=now;await save();return respond(summary(room,playerId));
    }
@@ -64,7 +65,7 @@ export class GameRoom{
   if(action==='/status')return respond(summary(room,playerId));
   if(action==='/leave'){
    room.players=room.players.filter(p=>p!==playerId);
-   if(!room.players.length)delete rooms[room.code];else room.updated=Date.now();
+   if(!room.players.length||room.deadline)delete rooms[room.code];else room.updated=Date.now();
    await save();return respond({ok:true});
   }
   if(action==='/word'){
